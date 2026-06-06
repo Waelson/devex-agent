@@ -7,6 +7,13 @@ Dois modos de execução:
 - **runtime** — gerencia containers Docker, portas e health checks em instâncias de workload
 - **gateway** — mantém as rotas HTTP/HTTPS do Caddy atualizadas nas instâncias de gateway
 
+### Documentação de fluxos
+
+| Documento | Descrição |
+|---|---|
+| [docs/runtime-agent.md](docs/runtime-agent.md) | Fluxos do Runtime Agent: boot, loops concorrentes, ciclo de comandos, deploy blue/green, máquinas de estado de deployments e portas, reconciliação no startup |
+| [docs/gateway-agent.md](docs/gateway-agent.md) | Fluxos do Gateway Agent: boot, reconcile loop, geração do caddy.json, aplicação via `/load`, validação de rotas, rollback para última config boa |
+
 ---
 
 ## Arquitetura
