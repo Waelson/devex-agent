@@ -11,6 +11,12 @@ vendor/
 coverage.out
 coverage.html
 
+# tokens e secrets — nunca commitar
+token
+*.token
+*.pem
+*.key
+
 # estado local de desenvolvimento
 *.local.yaml
 *.local.json
