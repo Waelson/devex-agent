@@ -3,8 +3,8 @@
 # Uso: sudo bash scripts/install-caddy.sh
 #
 # Variáveis de ambiente opcionais:
-#   CADDY_VERSION   Versão do Caddy a instalar (padrão: detecta a mais recente)
-#   SKIP_CHECKSUM   Pular verificação de checksum (não recomendado): "true"
+#   CADDY_VERSION   Versão a instalar (padrão: detecta a mais recente via GitHub API)
+#   SKIP_CHECKSUM   Pular verificação de checksum: "true" (não recomendado)
 set -euo pipefail
 
 # ─── Helpers de output ────────────────────────────────────────────────────────
@@ -22,30 +22,36 @@ error()   { echo -e "${RED}[ERROR]${NC} $*" >&2; }
 die()     { error "$*"; exit 1; }
 section() { echo -e "\n${BLUE}══ $* ══${NC}"; }
 
+# ─── Caminhos fixos ───────────────────────────────────────────────────────────
+
+INSTALL_PATH="/usr/local/bin/caddy"
+CONFIG_DIR="/etc/caddy"
+DATA_DIR="/var/lib/caddy"
+LOG_DIR="/var/log/caddy"
+CONFIG_FILE="$CONFIG_DIR/caddy.json"
+SERVICE_FILE="/etc/systemd/system/caddy.service"
+SKIP_CHECKSUM="${SKIP_CHECKSUM:-false}"
+
 # ─── 1. Validações de pré-requisitos ─────────────────────────────────────────
 
 section "Validando pré-requisitos"
 
-# Root
 if [ "$(id -u)" -ne 0 ]; then
   die "Este script deve ser executado como root. Use: sudo bash $0"
 fi
 ok "Executando como root"
 
-# Arquitetura
 ARCH="$(uname -m)"
 if [ "$ARCH" != "x86_64" ]; then
   die "Arquitetura não suportada: $ARCH. Este script requer x86_64."
 fi
 ok "Arquitetura: $ARCH"
 
-# Sistema operacional
 if [ -f /etc/os-release ]; then
   # shellcheck source=/dev/null
   source /etc/os-release
   if [[ "${ID:-}" != "amzn" && "${ID_LIKE:-}" != *"fedora"* ]]; then
     warn "Sistema detectado: ${PRETTY_NAME:-desconhecido}. Este script foi testado no Amazon Linux 2023."
-    warn "A instalação pode não funcionar corretamente."
   else
     ok "Sistema operacional: ${PRETTY_NAME:-Amazon Linux}"
   fi
@@ -53,7 +59,6 @@ else
   warn "Não foi possível detectar o sistema operacional (/etc/os-release ausente)."
 fi
 
-# Ferramentas necessárias
 REQUIRED_TOOLS=(curl sha512sum tar systemctl)
 MISSING_TOOLS=()
 for tool in "${REQUIRED_TOOLS[@]}"; do
@@ -64,35 +69,40 @@ done
 if [ ${#MISSING_TOOLS[@]} -gt 0 ]; then
   die "Ferramentas ausentes: ${MISSING_TOOLS[*]}. Instale-as antes de continuar."
 fi
-ok "Ferramentas necessárias disponíveis: ${REQUIRED_TOOLS[*]}"
+ok "Ferramentas disponíveis: ${REQUIRED_TOOLS[*]}"
 
-# Conectividade com internet
 info "Verificando conectividade com github.com..."
 if ! curl -sf --max-time 10 "https://github.com" -o /dev/null; then
   die "Sem acesso a github.com. Verifique a conectividade da instância."
 fi
 ok "Conectividade com internet OK"
 
-# Portas em uso (aviso, não bloqueia)
-for port in 80 443 2019; do
+for port in 80 2019; do
   if ss -tlnp 2>/dev/null | grep -q ":${port} "; then
-    warn "Porta $port já está em uso. Verifique se outro serviço não conflita com o Caddy."
+    warn "Porta $port já está em uso. Será liberada quando o serviço atual for parado."
   fi
 done
 
-# Caddy já instalado?
-INSTALL_PATH="/usr/local/bin/caddy"
-if [ -f "$INSTALL_PATH" ]; then
-  EXISTING_VERSION="$("$INSTALL_PATH" version 2>/dev/null | awk '{print $1}' || echo "desconhecida")"
-  warn "Caddy já está instalado: $EXISTING_VERSION"
-  warn "A instalação vai sobrescrever o binário existente."
+# ─── 2. Parar serviço existente (se houver) ───────────────────────────────────
+
+section "Verificando instalação existente"
+
+if systemctl is-active --quiet caddy 2>/dev/null; then
+  info "Serviço caddy está rodando. Parando para reinstalação..."
+  systemctl stop caddy
+  ok "Serviço caddy parado"
+else
+  info "Nenhum serviço caddy ativo encontrado"
 fi
 
-# ─── 2. Detecção da versão ────────────────────────────────────────────────────
+if [ -f "$INSTALL_PATH" ]; then
+  EXISTING_VERSION="$("$INSTALL_PATH" version 2>/dev/null | awk '{print $1}' || echo "desconhecida")"
+  warn "Caddy já instalado ($EXISTING_VERSION). O binário será substituído."
+fi
+
+# ─── 3. Detecção da versão ────────────────────────────────────────────────────
 
 section "Detectando versão do Caddy"
-
-SKIP_CHECKSUM="${SKIP_CHECKSUM:-false}"
 
 if [ -n "${CADDY_VERSION:-}" ]; then
   info "Versão definida via variável de ambiente: $CADDY_VERSION"
@@ -103,10 +113,9 @@ else
     | grep '"tag_name"' \
     | sed 's/.*"v\([^"]*\)".*/\1/')"
   if [ -z "$CADDY_VERSION" ]; then
-    die "Não foi possível detectar a versão mais recente do Caddy. Defina CADDY_VERSION manualmente."
+    die "Não foi possível detectar a versão mais recente. Defina CADDY_VERSION manualmente."
   fi
 fi
-
 ok "Versão a instalar: $CADDY_VERSION"
 
 DOWNLOAD_BASE="https://github.com/caddyserver/caddy/releases/download"
@@ -115,7 +124,7 @@ CHECKSUMS_FILENAME="caddy_${CADDY_VERSION}_checksums.txt"
 DOWNLOAD_URL="$DOWNLOAD_BASE/v${CADDY_VERSION}/$ARCHIVE"
 CHECKSUMS_URL="$DOWNLOAD_BASE/v${CADDY_VERSION}/$CHECKSUMS_FILENAME"
 
-# ─── 3. Download e verificação ────────────────────────────────────────────────
+# ─── 4. Download e verificação ────────────────────────────────────────────────
 
 section "Baixando Caddy v${CADDY_VERSION}"
 
@@ -135,22 +144,16 @@ if [ "$SKIP_CHECKSUM" != "true" ]; then
   fi
 
   info "Verificando checksum..."
-
-  # O Caddy usa SHA-512 no arquivo de checksums.
-  # Extraímos o hash esperado (primeiro campo da linha que menciona o arquivo)
-  # e comparamos com o hash calculado localmente.
   EXPECTED_HASH="$(grep "$ARCHIVE" "$TMPDIR/$CHECKSUMS_FILENAME" | awk '{print $1}')"
   if [ -z "$EXPECTED_HASH" ]; then
     die "Hash não encontrado no arquivo de checksums para $ARCHIVE."
   fi
 
-  HASH_LEN="${#EXPECTED_HASH}"
-  if [ "$HASH_LEN" -ge 100 ]; then
-    # SHA-512 (128 hex chars)
+  # O Caddy usa SHA-512; detectamos pelo comprimento do hash (≥100 chars).
+  if [ "${#EXPECTED_HASH}" -ge 100 ]; then
     ACTUAL_HASH="$(sha512sum "$TMPDIR/$ARCHIVE" | awk '{print $1}')"
     ALGO="SHA-512"
   else
-    # SHA-256 (64 hex chars)
     ACTUAL_HASH="$(sha256sum "$TMPDIR/$ARCHIVE" | awk '{print $1}')"
     ALGO="SHA-256"
   fi
@@ -173,7 +176,7 @@ if [ ! -f "$TMPDIR/caddy" ]; then
 fi
 ok "Extração concluída"
 
-# ─── 4. Instalação do binário ─────────────────────────────────────────────────
+# ─── 5. Instalação do binário ─────────────────────────────────────────────────
 
 section "Instalando binário"
 
@@ -183,36 +186,27 @@ chmod 755 "$INSTALL_PATH"
 INSTALLED_VERSION="$("$INSTALL_PATH" version 2>/dev/null | awk '{print $1}' || echo "?")"
 ok "Caddy instalado em $INSTALL_PATH (versão: $INSTALLED_VERSION)"
 
-# ─── 5. Criação de diretórios ─────────────────────────────────────────────────
+# ─── 6. Criação de diretórios ─────────────────────────────────────────────────
 
 section "Criando diretórios"
-
-CONFIG_DIR="/etc/caddy"
-DATA_DIR="/var/lib/caddy"
-LOG_DIR="/var/log/caddy"
-CONFIG_FILE="$CONFIG_DIR/caddy.json"
-SERVICE_FILE="/etc/systemd/system/caddy.service"
 
 mkdir -p "$CONFIG_DIR" "$DATA_DIR" "$LOG_DIR"
 chmod 755 "$CONFIG_DIR"
 chmod 700 "$DATA_DIR"
 chmod 755 "$LOG_DIR"
 
-ok "Diretórios criados:"
 ok "  $CONFIG_DIR  (configuração)"
-ok "  $DATA_DIR   (dados/certificados TLS)"
-ok "  $LOG_DIR    (logs)"
+ok "  $DATA_DIR    (dados/certificados TLS)"
+ok "  $LOG_DIR     (logs)"
 
-# ─── 6. Arquivo de configuração inicial ───────────────────────────────────────
+# ─── 7. Arquivo de configuração ───────────────────────────────────────────────
 
-section "Configuração inicial"
+section "Gravando configuração inicial"
 
-if [ -f "$CONFIG_FILE" ]; then
-  warn "Arquivo de configuração já existe: $CONFIG_FILE"
-  warn "O arquivo existente não será sobrescrito."
-else
-  info "Criando $CONFIG_FILE..."
-  cat > "$CONFIG_FILE" <<'JSON'
+# Sempre sobrescreve para garantir que o config esteja correto.
+# O Gateway Agent substituirá esta configuração ao aplicar o desired state.
+info "Gravando $CONFIG_FILE..."
+cat > "$CONFIG_FILE" <<'JSON'
 {
   "admin": {
     "listen": "127.0.0.1:2019"
@@ -229,19 +223,14 @@ else
   }
 }
 JSON
-  chmod 640 "$CONFIG_FILE"
-  ok "Configuração inicial criada: $CONFIG_FILE"
-  info "O DevEx Gateway Agent irá substituir esta configuração ao aplicar o desired state."
-fi
+chmod 640 "$CONFIG_FILE"
+ok "Configuração gravada: $CONFIG_FILE"
 
-# ─── 7. Unit file do systemd ──────────────────────────────────────────────────
+# ─── 8. Unit file do systemd ──────────────────────────────────────────────────
 
 section "Configurando serviço systemd"
 
-if [ -f "$SERVICE_FILE" ]; then
-  warn "Unit file já existe: $SERVICE_FILE. Será sobrescrito."
-fi
-
+# Sempre sobrescreve o unit file para garantir que o ExecStart esteja correto.
 cat > "$SERVICE_FILE" <<UNIT
 [Unit]
 Description=Caddy HTTP/HTTPS Server (DevEx Gateway)
@@ -257,7 +246,6 @@ Restart=on-failure
 RestartSec=5
 User=root
 
-; Caddy exige acesso de escrita para dados do ACME (certificados TLS).
 Environment=HOME=$DATA_DIR
 WorkingDirectory=$DATA_DIR
 
@@ -272,20 +260,19 @@ StandardError=journal
 WantedBy=multi-user.target
 UNIT
 
-ok "Unit file criado: $SERVICE_FILE"
+ok "Unit file gravado: $SERVICE_FILE"
 
 systemctl daemon-reload
 systemctl enable caddy
 ok "Serviço habilitado para iniciar no boot"
 
-# ─── 8. Inicialização e validação ─────────────────────────────────────────────
+# ─── 9. Inicialização e validação ─────────────────────────────────────────────
 
 section "Iniciando serviço"
 
-info "Iniciando caddy..."
 if ! systemctl start caddy; then
   error "Falha ao iniciar o Caddy."
-  error "Verifique os logs: journalctl -u caddy -n 50"
+  journalctl -u caddy -n 30 --no-pager >&2
   exit 1
 fi
 
@@ -293,13 +280,12 @@ sleep 3
 
 section "Validando instalação"
 
-if systemctl is-active --quiet caddy; then
-  ok "Serviço caddy está ATIVO"
-else
-  error "Serviço caddy não está ativo."
+if ! systemctl is-active --quiet caddy; then
+  error "Serviço caddy não está ativo após inicialização."
   journalctl -u caddy -n 30 --no-pager >&2
   exit 1
 fi
+ok "Serviço caddy ATIVO"
 
 if systemctl is-enabled --quiet caddy; then
   ok "Serviço caddy habilitado no boot"
@@ -308,18 +294,17 @@ else
 fi
 
 info "Verificando Admin API em 127.0.0.1:2019..."
-RETRIES=5
-for i in $(seq 1 $RETRIES); do
+for i in $(seq 1 5); do
   if curl -sf --max-time 3 "http://127.0.0.1:2019/config/" -o /dev/null; then
     ok "Admin API acessível em http://127.0.0.1:2019"
     break
   fi
-  if [ "$i" -eq "$RETRIES" ]; then
-    error "Admin API não acessível após $RETRIES tentativas."
-    error "Verifique: journalctl -u caddy -n 50"
+  if [ "$i" -eq 5 ]; then
+    error "Admin API não acessível após 5 tentativas."
+    journalctl -u caddy -n 30 --no-pager >&2
     exit 1
   fi
-  info "Tentativa $i/$RETRIES — aguardando Admin API..."
+  info "Tentativa $i/5 — aguardando Admin API..."
   sleep 2
 done
 
@@ -344,7 +329,6 @@ echo "  journalctl -u caddy -f"
 echo "  curl http://127.0.0.1:2019/config/"
 echo ""
 echo -e "${YELLOW}ATENÇÃO — Security Group:${NC}"
-echo "  Certifique-se de que a porta 2019 NÃO está acessível externamente."
+echo "  Porta 2019 NÃO deve ser acessível externamente."
 echo "  Apenas as portas 80 e 443 devem ser abertas publicamente."
-echo "  A porta 2019 deve ser acessível apenas pelo próprio host (127.0.0.1)."
 echo ""
