@@ -107,7 +107,7 @@ chmod 600 ~/.devex-token
 **Deploy do Runtime Agent:**
 
 ```bash
-bash scripts/deploy.sh \
+bash scripts/deploy-agent.sh \
   --host <IP_DA_INSTANCIA> \
   --key ~/.ssh/sua-chave.pem \
   --mode runtime \
@@ -117,7 +117,7 @@ bash scripts/deploy.sh \
 **Deploy do Gateway Agent:**
 
 ```bash
-bash scripts/deploy.sh \
+bash scripts/deploy-agent.sh \
   --host <IP_DA_INSTANCIA> \
   --key ~/.ssh/sua-chave.pem \
   --mode gateway \

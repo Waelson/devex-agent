@@ -1,0 +1,53 @@
+  curl -s -X POST http://127.0.0.1:2019/load \
+    -H "Content-Type: application/json" \
+    -d '{
+      "admin": { "listen": "127.0.0.1:2019" },
+      "apps": {
+        "http": {
+          "servers": {
+            "devex": {
+              "listen": [":80"],
+              "routes": [
+                {
+                  "match": [{ "host": ["clarus-billing.dev.devexapp.com"] }],
+                  "handle": [
+                    {
+                      "handler": "reverse_proxy",
+                      "upstreams": [{ "dial": "172.31.45.39:5173" }]
+                    }
+                  ]
+                },
+                {
+                  "match": [{ "host": ["clarus-billing-api.dev.devexapp.com"] }],
+                  "handle": [
+                    {
+                      "handler": "headers",
+                      "response": {
+                        "set": {
+                          "Access-Control-Allow-Origin": ["http://clarus-billing.dev.devexapp.com"],
+                          "Access-Control-Allow-Methods": ["GET, POST, PUT, DELETE, OPTIONS"],
+                          "Access-Control-Allow-Headers": ["Content-Type, Authorization"]
+                        }
+                      }
+                    },
+                    {
+                      "handler": "reverse_proxy",
+                      "upstreams": [{ "dial": "172.31.45.39:3001" }]
+                    }
+                  ]
+                },
+                {
+                  "handle": [
+                    {
+                      "handler": "static_response",
+                      "status_code": 404,
+                      "body": "route not found"
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      }
+    }'
