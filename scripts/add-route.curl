@@ -1,74 +1,69 @@
-curl -s -X POST http://127.0.0.1:2019/load \
-  -H "Content-Type: application/json" \
-  -d '{
-    "admin": { "listen": "127.0.0.1:2019" },
-    "apps": {
-      "tls": {
-        "automation": {
-          "email": "aws@useclarus.com.br"
-        }
-      },
-      "http": {
-        "servers": {
-          "devex-https": {
-            "listen": [":443"],
-            "routes": [
-              {
-                "match": [{ "host": ["clarus-billing.dev.devexapp.com"] }],
-                "handle": [
-                  {
-                    "handler": "reverse_proxy",
-                    "upstreams": [{ "dial": "172.31.45.39:5173" }]
-                  }
-                ]
-              },
-              {
-                "match": [{ "host": ["clarus-billing-api.dev.devexapp.com"] }],
-                "handle": [
-                  {
-                    "handler": "headers",
-                    "response": {
-                      "set": {
-                        "Access-Control-Allow-Origin": ["https://clarus-billing.dev.devexapp.com"],
-                        "Access-Control-Allow-Methods": ["GET, POST, PUT, DELETE, OPTIONS"],
-                        "Access-Control-Allow-Headers": ["Content-Type, Authorization"]
+  curl -s -X POST http://127.0.0.1:2019/load \
+    -H "Content-Type: application/json" \
+    -d '{
+      "admin": { "listen": "127.0.0.1:2019" },
+      "apps": {
+        "http": {
+          "servers": {
+            "devex-https": {
+              "listen": [":443"],
+              "routes": [
+                {
+                  "match": [{ "host": ["clarus-billing.dev.devexapp.com"] }],
+                  "handle": [
+                    {
+                      "handler": "reverse_proxy",
+                      "upstreams": [{ "dial": "172.31.45.39:5173" }]
+                    }
+                  ]
+                },
+                {
+                  "match": [{ "host": ["clarus-billing-api.dev.devexapp.com"] }],
+                  "handle": [
+                    {
+                      "handler": "headers",
+                      "response": {
+                        "set": {
+                          "Access-Control-Allow-Origin": ["https://clarus-billing.dev.devexapp.com"],
+                          "Access-Control-Allow-Methods": ["GET, POST, PUT, DELETE, OPTIONS"],
+                          "Access-Control-Allow-Headers": ["Content-Type, Authorization"]
+                        }
+                      }
+                    },
+                    {
+                      "handler": "reverse_proxy",
+                      "upstreams": [{ "dial": "172.31.45.39:3001" }]
+                    }
+                  ]
+                },
+                {
+                  "handle": [
+                    {
+                      "handler": "static_response",
+                      "status_code": 404,
+                      "body": "route not found"
+                    }
+                  ]
+                }
+              ]
+            },
+            "devex-http": {
+              "listen": [":80"],
+              "routes": [
+                {
+                  "handle": [
+                    {
+                      "handler": "static_response",
+                      "status_code": 301,
+                      "headers": {
+                        "Location": ["https://{http.request.host}{http.request.uri}"]
                       }
                     }
-                  },
-                  {
-                    "handler": "reverse_proxy",
-                    "upstreams": [{ "dial": "172.31.45.39:3001" }]
-                  }
-                ]
-              },
-              {
-                "handle": [
-                  {
-                    "handler": "static_response",
-                    "status_code": 404,
-                    "body": "route not found"
-                  }
-                ]
-              }
-            ]
-          },
-          "devex-http": {
-            "listen": [":80"],
-            "routes": [
-              {
-                "handle": [
-                  {
-                    "handler": "static_response",
-                    "status_code": 301,
-                    "headers": {
-                      "Location": ["https://{http.request.host}{http.request.uri}"]
-                    }
-                  }
-                ]
-              }
-            ]
+                  ]
+                }
+              ]
+            }
           }
         }
       }
-    }
-  }'
+    }'
