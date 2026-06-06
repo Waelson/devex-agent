@@ -80,7 +80,7 @@ sudo chmod 755 /usr/local/bin/devex-agent
 ### Verificar versão
 
 ```bash
-./devex-agent --version
+devex-agent --version
 ```
 
 ### Validar config sem iniciar
@@ -91,43 +91,112 @@ sudo chmod 755 /usr/local/bin/devex-agent
 
 ---
 
-## Instalação
+## Instalação em uma instância EC2
 
-### 1. Criar diretórios e instalar binário
+O script `install-systemd.sh` precisa de três artefatos presentes na instância:
 
-```bash
-sudo bash scripts/install-systemd.sh
-```
+- O **binário** `devex-agent` compilado para Linux x86_64
+- O arquivo **`scripts/devex-agent.service`** (unit systemd)
+- Um dos arquivos de configuração: **`scripts/config-runtime.yaml`** ou **`scripts/config-gateway.yaml`**
 
-O script instala o binário em `/usr/local/bin/devex-agent`, cria os diretórios necessários e registra o serviço systemd.
+O procedimento completo está descrito abaixo.
 
-### 2. Copiar o arquivo de configuração
+---
 
-Para Runtime Agent:
-
-```bash
-sudo cp scripts/config-runtime.yaml /etc/devex-agent/config.yaml
-```
-
-Para Gateway Agent:
+### 1. Na sua máquina local: compilar o binário para Linux
 
 ```bash
-sudo cp scripts/config-gateway.yaml /etc/devex-agent/config.yaml
+GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o devex-agent-linux-amd64 ./cmd/devex-agent
 ```
 
-### 3. Configurar o token
+---
+
+### 2. Na sua máquina local: copiar os artefatos para a EC2
+
+```bash
+# Binário
+scp -i sua-chave.pem devex-agent-linux-amd64 ec2-user@<IP_DA_INSTANCIA>:/tmp/devex-agent
+
+# Unit systemd
+scp -i sua-chave.pem scripts/devex-agent.service ec2-user@<IP_DA_INSTANCIA>:/tmp/devex-agent.service
+
+# Script de instalação
+scp -i sua-chave.pem scripts/install-systemd.sh ec2-user@<IP_DA_INSTANCIA>:/tmp/install-systemd.sh
+
+# Arquivo de configuração (escolha um)
+scp -i sua-chave.pem scripts/config-runtime.yaml ec2-user@<IP_DA_INSTANCIA>:/tmp/config.yaml   # Runtime Agent
+scp -i sua-chave.pem scripts/config-gateway.yaml ec2-user@<IP_DA_INSTANCIA>:/tmp/config.yaml   # Gateway Agent
+```
+
+---
+
+### 3. Na instância EC2: preparar os arquivos
+
+```bash
+# Organizar na estrutura esperada pelo script
+mkdir -p /tmp/devex-install/scripts
+
+mv /tmp/devex-agent          /tmp/devex-install/devex-agent
+mv /tmp/devex-agent.service  /tmp/devex-install/scripts/devex-agent.service
+mv /tmp/install-systemd.sh   /tmp/devex-install/scripts/install-systemd.sh
+mv /tmp/config.yaml          /tmp/devex-install/scripts/config.yaml
+
+chmod +x /tmp/devex-install/scripts/install-systemd.sh
+```
+
+---
+
+### 4. Na instância EC2: executar o script de instalação
+
+```bash
+cd /tmp/devex-install
+sudo AGENT_BIN=./devex-agent bash scripts/install-systemd.sh
+```
+
+O script:
+- Instala o binário em `/usr/local/bin/devex-agent`
+- Cria os diretórios `/etc/devex-agent` e `/var/lib/devex-agent`
+- Registra e habilita o serviço systemd
+
+---
+
+### 5. Na instância EC2: copiar o arquivo de configuração
+
+```bash
+sudo cp /tmp/devex-install/scripts/config.yaml /etc/devex-agent/config.yaml
+sudo chmod 600 /etc/devex-agent/config.yaml
+```
+
+Edite o arquivo para ajustar os valores do seu ambiente:
+
+```bash
+sudo vi /etc/devex-agent/config.yaml
+```
+
+Campos obrigatórios a revisar: `agent.mode`, `agent.environment`, `platform.base_url`.
+
+---
+
+### 6. Na instância EC2: configurar o token
 
 ```bash
 echo "SEU_TOKEN_AQUI" | sudo tee /etc/devex-agent/token > /dev/null
 sudo chmod 600 /etc/devex-agent/token
-sudo chmod 600 /etc/devex-agent/config.yaml
 ```
 
-### 4. Iniciar o serviço
+---
+
+### 7. Na instância EC2: iniciar o serviço
 
 ```bash
 sudo systemctl start devex-agent
 sudo systemctl status devex-agent
+```
+
+Acompanhar os logs em tempo real:
+
+```bash
+sudo journalctl -u devex-agent -f
 ```
 
 ---
