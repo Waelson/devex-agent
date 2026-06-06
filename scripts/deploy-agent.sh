@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
-# deploy.sh — Compila e implanta o DevEx Agent em uma instância EC2.
+# deploy-agent.sh — Compila e implanta o DevEx Agent em uma instância EC2.
 #
 # Uso:
-#   bash scripts/deploy.sh --host <IP> --key <KEY.pem> --mode <runtime|gateway> --token-file <arquivo>
-#   bash scripts/deploy.sh --host <IP> --key <KEY.pem> --mode <runtime|gateway> --token <TOKEN>
+#   bash scripts/deploy-agent.sh --host <IP> --key <KEY.pem> --mode <runtime|gateway> --token-file <arquivo>
+#   bash scripts/deploy-agent.sh --host <IP> --key <KEY.pem> --mode <runtime|gateway> --token <TOKEN>
 #
 # Exemplos:
-#   bash scripts/deploy.sh --host 203.0.113.10 --key ~/.ssh/dev.pem --mode runtime --token-file ~/.devex-token
-#   bash scripts/deploy.sh --host 203.0.113.10 --key ~/.ssh/dev.pem --mode gateway --token "tk_abc123" --user ec2-user
+#   bash scripts/deploy-agent.sh --host 203.0.113.10 --key ~/.ssh/dev.pem --mode runtime --token-file ~/.devex-token
+#   bash scripts/deploy-agent.sh --host 203.0.113.10 --key ~/.ssh/dev.pem --mode gateway --token-file ~/.devex-token
 #
 # Flags opcionais:
 #   --user         Usuário SSH (padrão: ec2-user)
@@ -31,7 +31,7 @@ die()     { error "$*"; exit 1; }
 section() { echo -e "\n${BLUE}══ $* ══${NC}"; }
 
 usage() {
-  echo "Uso: bash scripts/deploy.sh [flags]"
+  echo "Uso: bash scripts/deploy-agent.sh [flags]"
   echo ""
   echo "Flags obrigatórias:"
   echo "  --host         IP ou hostname da instância EC2"
@@ -101,6 +101,7 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 CONFIG_FILE="$SCRIPT_DIR/config-${MODE}.yaml"
 SERVICE_FILE="$SCRIPT_DIR/devex-agent.service"
 INSTALL_SCRIPT="$SCRIPT_DIR/install-systemd.sh"
+CADDY_SCRIPT="$SCRIPT_DIR/install-caddy.sh"
 BINARY="$REPO_ROOT/devex-agent-linux-amd64"
 
 [ ! -f "$CONFIG_FILE" ]    && die "Config não encontrada: $CONFIG_FILE"
@@ -110,6 +111,37 @@ BINARY="$REPO_ROOT/devex-agent-linux-amd64"
 ok "Host  : $SSH_USER@$HOST"
 ok "Modo  : $MODE"
 ok "Chave : $KEY"
+
+# ─── Menu interativo para modo gateway ───────────────────────────────────────
+
+INSTALL_AGENT=true
+INSTALL_CADDY=false
+
+if [ "$MODE" = "gateway" ]; then
+  echo ""
+  echo -e "${BLUE}O modo gateway utiliza o Caddy como proxy reverso.${NC}"
+  echo -e "${BLUE}O que deseja instalar nesta instância?${NC}"
+  echo ""
+  echo "  1) Apenas o DevEx Agent"
+  echo "  2) Apenas o Caddy"
+  echo "  3) DevEx Agent + Caddy  (recomendado para nova instância)"
+  echo ""
+
+  while true; do
+    read -rp "Escolha [1-3]: " CHOICE
+    case "$CHOICE" in
+      1) INSTALL_AGENT=true;  INSTALL_CADDY=false; break ;;
+      2) INSTALL_AGENT=false; INSTALL_CADDY=true;  break ;;
+      3) INSTALL_AGENT=true;  INSTALL_CADDY=true;  break ;;
+      *) echo "  Opção inválida. Digite 1, 2 ou 3." ;;
+    esac
+  done
+
+  echo ""
+  if [ "$INSTALL_CADDY" = true ] && [ ! -f "$CADDY_SCRIPT" ]; then
+    die "Script do Caddy não encontrado: $CADDY_SCRIPT"
+  fi
+fi
 
 # ─── SSH helper ───────────────────────────────────────────────────────────────
 
@@ -128,16 +160,18 @@ scp_put() {
 
 # ─── 1. Compilar binário ──────────────────────────────────────────────────────
 
-section "Compilando binário para Linux x86_64"
+if [ "$INSTALL_AGENT" = true ]; then
+  section "Compilando binário para Linux x86_64"
 
-if [ "$SKIP_BUILD" = true ]; then
-  [ ! -f "$BINARY" ] && die "Binário não encontrado: $BINARY. Remova --skip-build para compilar."
-  warn "Build ignorado (--skip-build). Usando: $BINARY"
-else
-  command -v go &>/dev/null || die "Go não encontrado. Instale Go ou use --skip-build com um binário existente."
-  info "Compilando..."
-  GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o "$BINARY" "$REPO_ROOT/cmd/devex-agent"
-  ok "Binário gerado: $BINARY ($(du -sh "$BINARY" | cut -f1))"
+  if [ "$SKIP_BUILD" = true ]; then
+    [ ! -f "$BINARY" ] && die "Binário não encontrado: $BINARY. Remova --skip-build para compilar."
+    warn "Build ignorado (--skip-build). Usando: $BINARY"
+  else
+    command -v go &>/dev/null || die "Go não encontrado. Instale Go ou use --skip-build com um binário existente."
+    info "Compilando..."
+    GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o "$BINARY" "$REPO_ROOT/cmd/devex-agent"
+    ok "Binário gerado: $BINARY ($(du -sh "$BINARY" | cut -f1))"
+  fi
 fi
 
 # ─── 2. Verificar conectividade SSH ──────────────────────────────────────────
@@ -154,25 +188,48 @@ section "Enviando artefatos para a instância"
 REMOTE_TMP="/tmp/devex-deploy-$$"
 ssh_run "mkdir -p ${REMOTE_TMP}/scripts"
 
-info "Enviando binário..."
-scp_put "$BINARY" "${REMOTE_TMP}/devex-agent"
+if [ "$INSTALL_CADDY" = true ]; then
+  info "Enviando script de instalação do Caddy..."
+  scp_put "$CADDY_SCRIPT" "${REMOTE_TMP}/scripts/install-caddy.sh"
+fi
 
-info "Enviando unit systemd..."
-scp_put "$SERVICE_FILE" "${REMOTE_TMP}/scripts/devex-agent.service"
+if [ "$INSTALL_AGENT" = true ]; then
+  info "Enviando binário..."
+  scp_put "$BINARY" "${REMOTE_TMP}/devex-agent"
 
-info "Enviando script de instalação..."
-scp_put "$INSTALL_SCRIPT" "${REMOTE_TMP}/scripts/install-systemd.sh"
+  info "Enviando unit systemd..."
+  scp_put "$SERVICE_FILE" "${REMOTE_TMP}/scripts/devex-agent.service"
 
-info "Enviando config ($MODE)..."
-scp_put "$CONFIG_FILE" "${REMOTE_TMP}/scripts/config.yaml"
+  info "Enviando script de instalação do agente..."
+  scp_put "$INSTALL_SCRIPT" "${REMOTE_TMP}/scripts/install-systemd.sh"
 
-ok "Todos os artefatos enviados para ${REMOTE_TMP}"
+  info "Enviando config ($MODE)..."
+  scp_put "$CONFIG_FILE" "${REMOTE_TMP}/scripts/config.yaml"
+fi
 
-# ─── 4. Instalar na instância ────────────────────────────────────────────────
+ok "Artefatos enviados para ${REMOTE_TMP}"
 
-section "Instalando na instância"
+# ─── 4. Instalar Caddy ────────────────────────────────────────────────────────
 
-ssh_run bash <<REMOTE
+if [ "$INSTALL_CADDY" = true ]; then
+  section "Instalando Caddy"
+
+  ssh_run bash <<REMOTE
+set -euo pipefail
+chmod +x ${REMOTE_TMP}/scripts/install-caddy.sh
+echo "[REMOTE] Executando install-caddy.sh..."
+sudo bash ${REMOTE_TMP}/scripts/install-caddy.sh
+REMOTE
+
+  ok "Caddy instalado"
+fi
+
+# ─── 5. Instalar agente ───────────────────────────────────────────────────────
+
+if [ "$INSTALL_AGENT" = true ]; then
+  section "Instalando DevEx Agent"
+
+  ssh_run bash <<REMOTE
 set -euo pipefail
 
 chmod +x ${REMOTE_TMP}/scripts/install-systemd.sh
@@ -184,73 +241,81 @@ sudo AGENT_BIN=./devex-agent bash scripts/install-systemd.sh
 echo "[REMOTE] Copiando config para /etc/devex-agent/config.yaml..."
 sudo cp scripts/config.yaml /etc/devex-agent/config.yaml
 sudo chmod 600 /etc/devex-agent/config.yaml
-
-echo "[REMOTE] Limpando artefatos temporários..."
-rm -rf ${REMOTE_TMP}
 REMOTE
 
-ok "Instalação concluída"
+  ok "Agente instalado"
 
-# ─── 5. Configurar token ─────────────────────────────────────────────────────
+  # ─── 6. Configurar token ───────────────────────────────────────────────────
 
-section "Configurando token"
+  section "Configurando token"
 
-# Token é enviado via stdin para não aparecer em ps ou logs remotos.
-printf '%s' "$TOKEN" | ssh_run \
-  "sudo tee /etc/devex-agent/token > /dev/null && sudo chmod 600 /etc/devex-agent/token"
+  # Token é enviado via stdin para não aparecer em ps ou logs remotos.
+  printf '%s' "$TOKEN" | ssh_run \
+    "sudo tee /etc/devex-agent/token > /dev/null && sudo chmod 600 /etc/devex-agent/token"
 
-ok "Token configurado"
+  ok "Token configurado"
 
-# ─── 6. Iniciar serviço ───────────────────────────────────────────────────────
+  # ─── 7. Iniciar agente ─────────────────────────────────────────────────────
 
-section "Iniciando serviço"
+  section "Iniciando DevEx Agent"
 
-ssh_run bash <<'REMOTE'
+  ssh_run bash <<'REMOTE'
 set -euo pipefail
 sudo systemctl daemon-reload
 sudo systemctl restart devex-agent
 REMOTE
 
-# ─── 7. Verificar ─────────────────────────────────────────────────────────────
+  section "Verificando DevEx Agent"
 
-section "Verificando serviço"
+  info "Aguardando serviço estabilizar..."
+  MAX_WAIT=20
+  ELAPSED=0
+  STATUS=""
+  while [ "$ELAPSED" -lt "$MAX_WAIT" ]; do
+    STATUS="$(ssh_run "systemctl is-active devex-agent 2>/dev/null || true")"
+    case "$STATUS" in
+      active)           break ;;
+      failed|inactive)  break ;;
+      *)                sleep 2; ELAPSED=$((ELAPSED + 2)) ;;
+    esac
+  done
 
-info "Aguardando serviço estabilizar..."
-MAX_WAIT=20
-ELAPSED=0
-STATUS=""
-while [ "$ELAPSED" -lt "$MAX_WAIT" ]; do
-  STATUS="$(ssh_run "systemctl is-active devex-agent 2>/dev/null || true")"
-  case "$STATUS" in
-    active)           break ;;
-    failed|inactive)  break ;;
-    activating)       sleep 2; ELAPSED=$((ELAPSED + 2)) ;;
-    *)                sleep 2; ELAPSED=$((ELAPSED + 2)) ;;
-  esac
-done
-
-if [ "$STATUS" = "active" ]; then
-  ok "Serviço devex-agent está ATIVO"
-else
-  error "Serviço devex-agent não está ativo (status: $STATUS)"
-  echo ""
-  ssh_run "sudo journalctl -u devex-agent -n 20 --no-pager" >&2 || true
-  exit 1
+  if [ "$STATUS" = "active" ]; then
+    ok "Serviço devex-agent está ATIVO"
+  else
+    error "Serviço devex-agent não está ativo (status: $STATUS)"
+    echo ""
+    ssh_run "sudo journalctl -u devex-agent -n 20 --no-pager" >&2 || true
+    exit 1
+  fi
 fi
+
+# ─── 8. Limpar temporários ────────────────────────────────────────────────────
+
+ssh_run "rm -rf ${REMOTE_TMP}" || true
 
 # ─── Resumo ───────────────────────────────────────────────────────────────────
 
 echo ""
 echo -e "${GREEN}════════════════════════════════════════${NC}"
-echo -e "${GREEN}  DevEx Agent implantado com sucesso!${NC}"
+echo -e "${GREEN}  Implantação concluída com sucesso!${NC}"
 echo -e "${GREEN}════════════════════════════════════════${NC}"
 echo ""
-echo "  Host   : $HOST"
-echo "  Modo   : $MODE"
-echo "  Usuário: $SSH_USER"
+echo "  Host     : $HOST"
+echo "  Modo     : $MODE"
+echo "  Usuário  : $SSH_USER"
+if [ "$INSTALL_CADDY" = true ];  then echo "  Caddy    : instalado"; fi
+if [ "$INSTALL_AGENT" = true ];  then echo "  Agente   : instalado"; fi
 echo ""
 echo "Comandos úteis na instância:"
 echo "  ssh -i $KEY ${SSH_USER}@${HOST}"
-echo "  sudo systemctl status devex-agent"
-echo "  sudo journalctl -u devex-agent -f"
+if [ "$INSTALL_AGENT" = true ]; then
+  echo "  sudo systemctl status devex-agent"
+  echo "  sudo journalctl -u devex-agent -f"
+fi
+if [ "$INSTALL_CADDY" = true ]; then
+  echo "  sudo systemctl status caddy"
+  echo "  sudo journalctl -u caddy -f"
+  echo "  curl http://127.0.0.1:2019/config/"
+fi
 echo ""
