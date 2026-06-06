@@ -3,27 +3,9 @@
 # Uso: sudo bash scripts/install-caddy.sh
 #
 # Variáveis de ambiente opcionais:
-#   CADDY_VERSION   Versão do Caddy a instalar (padrão: 2.9.1)
+#   CADDY_VERSION   Versão do Caddy a instalar (padrão: detecta a mais recente)
 #   SKIP_CHECKSUM   Pular verificação de checksum (não recomendado): "true"
 set -euo pipefail
-
-# ─── Variáveis configuráveis ──────────────────────────────────────────────────
-
-CADDY_VERSION="${CADDY_VERSION:-2.9.1}"
-SKIP_CHECKSUM="${SKIP_CHECKSUM:-false}"
-
-INSTALL_PATH="/usr/local/bin/caddy"
-CONFIG_DIR="/etc/caddy"
-DATA_DIR="/var/lib/caddy"
-LOG_DIR="/var/log/caddy"
-CONFIG_FILE="$CONFIG_DIR/caddy.json"
-SERVICE_FILE="/etc/systemd/system/caddy.service"
-
-DOWNLOAD_BASE="https://github.com/caddyserver/caddy/releases/download"
-ARCHIVE="caddy_${CADDY_VERSION}_linux_amd64.tar.gz"
-CHECKSUMS_FILE="caddy_${CADDY_VERSION}_checksums.txt"
-DOWNLOAD_URL="$DOWNLOAD_BASE/v${CADDY_VERSION}/$ARCHIVE"
-CHECKSUMS_URL="$DOWNLOAD_BASE/v${CADDY_VERSION}/$CHECKSUMS_FILE"
 
 # ─── Helpers de output ────────────────────────────────────────────────────────
 
@@ -72,7 +54,7 @@ else
 fi
 
 # Ferramentas necessárias
-REQUIRED_TOOLS=(curl sha256sum tar systemctl)
+REQUIRED_TOOLS=(curl sha512sum tar systemctl)
 MISSING_TOOLS=()
 for tool in "${REQUIRED_TOOLS[@]}"; do
   if ! command -v "$tool" &>/dev/null; then
@@ -99,13 +81,41 @@ for port in 80 443 2019; do
 done
 
 # Caddy já instalado?
+INSTALL_PATH="/usr/local/bin/caddy"
 if [ -f "$INSTALL_PATH" ]; then
   EXISTING_VERSION="$("$INSTALL_PATH" version 2>/dev/null | awk '{print $1}' || echo "desconhecida")"
   warn "Caddy já está instalado: $EXISTING_VERSION"
   warn "A instalação vai sobrescrever o binário existente."
 fi
 
-# ─── 2. Download e verificação ────────────────────────────────────────────────
+# ─── 2. Detecção da versão ────────────────────────────────────────────────────
+
+section "Detectando versão do Caddy"
+
+SKIP_CHECKSUM="${SKIP_CHECKSUM:-false}"
+
+if [ -n "${CADDY_VERSION:-}" ]; then
+  info "Versão definida via variável de ambiente: $CADDY_VERSION"
+else
+  info "Consultando GitHub API para versão mais recente..."
+  CADDY_VERSION="$(curl -fsSL --max-time 10 \
+    "https://api.github.com/repos/caddyserver/caddy/releases/latest" \
+    | grep '"tag_name"' \
+    | sed 's/.*"v\([^"]*\)".*/\1/')"
+  if [ -z "$CADDY_VERSION" ]; then
+    die "Não foi possível detectar a versão mais recente do Caddy. Defina CADDY_VERSION manualmente."
+  fi
+fi
+
+ok "Versão a instalar: $CADDY_VERSION"
+
+DOWNLOAD_BASE="https://github.com/caddyserver/caddy/releases/download"
+ARCHIVE="caddy_${CADDY_VERSION}_linux_amd64.tar.gz"
+CHECKSUMS_FILENAME="caddy_${CADDY_VERSION}_checksums.txt"
+DOWNLOAD_URL="$DOWNLOAD_BASE/v${CADDY_VERSION}/$ARCHIVE"
+CHECKSUMS_URL="$DOWNLOAD_BASE/v${CADDY_VERSION}/$CHECKSUMS_FILENAME"
+
+# ─── 3. Download e verificação ────────────────────────────────────────────────
 
 section "Baixando Caddy v${CADDY_VERSION}"
 
@@ -114,28 +124,44 @@ trap 'rm -rf "$TMPDIR"' EXIT
 
 info "Baixando $ARCHIVE..."
 if ! curl -fL --progress-bar "$DOWNLOAD_URL" -o "$TMPDIR/$ARCHIVE"; then
-  die "Falha ao baixar $DOWNLOAD_URL"
+  die "Falha ao baixar $DOWNLOAD_URL. Verifique se a versão $CADDY_VERSION existe."
 fi
 ok "Download concluído"
 
 if [ "$SKIP_CHECKSUM" != "true" ]; then
   info "Baixando arquivo de checksums..."
-  if ! curl -fsSL "$CHECKSUMS_URL" -o "$TMPDIR/$CHECKSUMS_FILE"; then
+  if ! curl -fsSL "$CHECKSUMS_URL" -o "$TMPDIR/$CHECKSUMS_FILENAME"; then
     die "Falha ao baixar $CHECKSUMS_URL"
   fi
 
-  info "Verificando checksum SHA-256..."
-  EXPECTED_HASH="$(grep "$ARCHIVE" "$TMPDIR/$CHECKSUMS_FILE" | awk '{print $1}')"
+  info "Verificando checksum..."
+
+  # O Caddy usa SHA-512 no arquivo de checksums.
+  # Extraímos o hash esperado (primeiro campo da linha que menciona o arquivo)
+  # e comparamos com o hash calculado localmente.
+  EXPECTED_HASH="$(grep "$ARCHIVE" "$TMPDIR/$CHECKSUMS_FILENAME" | awk '{print $1}')"
   if [ -z "$EXPECTED_HASH" ]; then
     die "Hash não encontrado no arquivo de checksums para $ARCHIVE."
   fi
-  ACTUAL_HASH="$(sha256sum "$TMPDIR/$ARCHIVE" | awk '{print $1}')"
+
+  HASH_LEN="${#EXPECTED_HASH}"
+  if [ "$HASH_LEN" -ge 100 ]; then
+    # SHA-512 (128 hex chars)
+    ACTUAL_HASH="$(sha512sum "$TMPDIR/$ARCHIVE" | awk '{print $1}')"
+    ALGO="SHA-512"
+  else
+    # SHA-256 (64 hex chars)
+    ACTUAL_HASH="$(sha256sum "$TMPDIR/$ARCHIVE" | awk '{print $1}')"
+    ALGO="SHA-256"
+  fi
+
   if [ "$EXPECTED_HASH" != "$ACTUAL_HASH" ]; then
+    error "Algoritmo     : $ALGO"
     error "Hash esperado : $EXPECTED_HASH"
     error "Hash calculado: $ACTUAL_HASH"
     die "Checksum inválido para $ARCHIVE. O download pode estar corrompido."
   fi
-  ok "Checksum verificado com sucesso ($ACTUAL_HASH)"
+  ok "Checksum $ALGO verificado com sucesso"
 else
   warn "Verificação de checksum ignorada (SKIP_CHECKSUM=true)."
 fi
@@ -147,7 +173,7 @@ if [ ! -f "$TMPDIR/caddy" ]; then
 fi
 ok "Extração concluída"
 
-# ─── 3. Instalação do binário ─────────────────────────────────────────────────
+# ─── 4. Instalação do binário ─────────────────────────────────────────────────
 
 section "Instalando binário"
 
@@ -157,9 +183,15 @@ chmod 755 "$INSTALL_PATH"
 INSTALLED_VERSION="$("$INSTALL_PATH" version 2>/dev/null | awk '{print $1}' || echo "?")"
 ok "Caddy instalado em $INSTALL_PATH (versão: $INSTALLED_VERSION)"
 
-# ─── 4. Criação de diretórios ─────────────────────────────────────────────────
+# ─── 5. Criação de diretórios ─────────────────────────────────────────────────
 
 section "Criando diretórios"
+
+CONFIG_DIR="/etc/caddy"
+DATA_DIR="/var/lib/caddy"
+LOG_DIR="/var/log/caddy"
+CONFIG_FILE="$CONFIG_DIR/caddy.json"
+SERVICE_FILE="/etc/systemd/system/caddy.service"
 
 mkdir -p "$CONFIG_DIR" "$DATA_DIR" "$LOG_DIR"
 chmod 755 "$CONFIG_DIR"
@@ -171,7 +203,7 @@ ok "  $CONFIG_DIR  (configuração)"
 ok "  $DATA_DIR   (dados/certificados TLS)"
 ok "  $LOG_DIR    (logs)"
 
-# ─── 5. Arquivo de configuração inicial ───────────────────────────────────────
+# ─── 6. Arquivo de configuração inicial ───────────────────────────────────────
 
 section "Configuração inicial"
 
@@ -202,7 +234,7 @@ JSON
   info "O DevEx Gateway Agent irá substituir esta configuração ao aplicar o desired state."
 fi
 
-# ─── 6. Unit file do systemd ──────────────────────────────────────────────────
+# ─── 7. Unit file do systemd ──────────────────────────────────────────────────
 
 section "Configurando serviço systemd"
 
@@ -246,7 +278,7 @@ systemctl daemon-reload
 systemctl enable caddy
 ok "Serviço habilitado para iniciar no boot"
 
-# ─── 7. Inicialização e validação ─────────────────────────────────────────────
+# ─── 8. Inicialização e validação ─────────────────────────────────────────────
 
 section "Iniciando serviço"
 
@@ -257,12 +289,10 @@ if ! systemctl start caddy; then
   exit 1
 fi
 
-# Aguardar o serviço estabilizar
 sleep 3
 
 section "Validando instalação"
 
-# Serviço ativo?
 if systemctl is-active --quiet caddy; then
   ok "Serviço caddy está ATIVO"
 else
@@ -271,14 +301,12 @@ else
   exit 1
 fi
 
-# Serviço habilitado no boot?
 if systemctl is-enabled --quiet caddy; then
   ok "Serviço caddy habilitado no boot"
 else
   warn "Serviço caddy NÃO está habilitado no boot. Execute: systemctl enable caddy"
 fi
 
-# Admin API acessível?
 info "Verificando Admin API em 127.0.0.1:2019..."
 RETRIES=5
 for i in $(seq 1 $RETRIES); do
@@ -295,7 +323,6 @@ for i in $(seq 1 $RETRIES); do
   sleep 2
 done
 
-# Versão instalada
 FINAL_VERSION="$("$INSTALL_PATH" version 2>/dev/null | awk '{print $1}' || echo "?")"
 
 # ─── Resumo ───────────────────────────────────────────────────────────────────
