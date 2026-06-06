@@ -1,0 +1,34 @@
+agent:
+  id: ""
+  mode: "runtime"
+  environment: "dev"
+  role: "api"
+
+platform:
+  base_url: "https://platform.useclarus.app"
+  token_file: "/etc/devex-agent/token"
+
+runtime:
+  max_active_containers: 10
+  draining_grace_period_seconds: 300
+  command_poll_interval_seconds: 10
+
+ports:
+  from: 4100
+  to: 4114
+
+docker:
+  command: "docker"
+  default_stop_timeout_seconds: 30
+
+health_check:
+  timeout_seconds: 2
+  interval_seconds: 5
+  retries: 6
+
+state:
+  dir: "/var/lib/devex-agent"
+
+logging:
+  level: "info"
+  format: "json"

@@ -1,0 +1,25 @@
+agent:
+  id: ""
+  mode: "gateway"
+  environment: "dev"
+  role: "gateway"
+
+platform:
+  base_url: "https://platform.useclarus.app"
+  token_file: "/etc/devex-agent/token"
+
+caddy:
+  admin_url: "http://127.0.0.1:2019"
+  current_config_path: "/var/lib/devex-agent/gateway/current-caddy.json"
+  previous_config_path: "/var/lib/devex-agent/gateway/previous-caddy.json"
+  last_good_config_path: "/var/lib/devex-agent/gateway/last-good-caddy.json"
+
+reconcile:
+  interval_seconds: 10
+
+state:
+  dir: "/var/lib/devex-agent"
+
+logging:
+  level: "info"
+  format: "json"

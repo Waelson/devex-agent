@@ -1,0 +1,24 @@
+# binários
+devex-agent
+dist/
+
+# dependências Go
+vendor/
+
+# cobertura de testes
+coverage.out
+coverage.html
+
+# estado local de desenvolvimento
+*.local.yaml
+*.local.json
+
+# IDEs
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db

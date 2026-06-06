@@ -1,0 +1,25 @@
+[Unit]
+Description=DevEx Agent
+Documentation=https://useclarus.app
+After=network-online.target docker.service
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/devex-agent --config /etc/devex-agent/config.yaml
+Restart=always
+RestartSec=5
+User=root
+WorkingDirectory=/var/lib/devex-agent
+
+KillSignal=SIGTERM
+TimeoutStopSec=60
+
+StandardOutput=journal
+StandardError=journal
+
+NoNewPrivileges=false
+
+[Install]
+WantedBy=multi-user.target
