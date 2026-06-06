@@ -93,6 +93,53 @@ devex-agent --version
 
 ## Instalação em uma instância EC2
 
+### Deploy automatizado (recomendado)
+
+O script `scripts/deploy.sh` executa todo o processo em um único comando a partir da sua máquina local: compila o binário, envia os artefatos via SCP, instala o serviço e verifica se subiu corretamente.
+
+**Pré-requisito:** salve o token do agente em um arquivo local.
+
+```bash
+echo "SEU_TOKEN_AQUI" > ~/.devex-token
+chmod 600 ~/.devex-token
+```
+
+**Deploy do Runtime Agent:**
+
+```bash
+bash scripts/deploy.sh \
+  --host <IP_DA_INSTANCIA> \
+  --key ~/.ssh/sua-chave.pem \
+  --mode runtime \
+  --token-file ~/.devex-token
+```
+
+**Deploy do Gateway Agent:**
+
+```bash
+bash scripts/deploy.sh \
+  --host <IP_DA_INSTANCIA> \
+  --key ~/.ssh/sua-chave.pem \
+  --mode gateway \
+  --token-file ~/.devex-token
+```
+
+**Flags disponíveis:**
+
+| Flag | Descrição |
+|---|---|
+| `--host` | IP ou hostname da instância EC2 |
+| `--key` | Caminho para o arquivo `.pem` do Key Pair |
+| `--mode` | `runtime` ou `gateway` |
+| `--token-file` | Arquivo com o token do agente (recomendado) |
+| `--token` | Token como string direta (evite em produção) |
+| `--user` | Usuário SSH (padrão: `ec2-user`) |
+| `--skip-build` | Reutiliza o binário `devex-agent-linux-amd64` já existente sem recompilar |
+
+---
+
+### Deploy manual (passo a passo)
+
 O script `install-systemd.sh` precisa de três artefatos presentes na instância:
 
 - O **binário** `devex-agent` compilado para Linux x86_64
