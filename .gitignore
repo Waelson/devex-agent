@@ -1,5 +1,7 @@
 # binários
 devex-agent
+devex-agent-linux-amd64
+devex-agent-linux-arm64
 dist/
 
 # dependências Go
