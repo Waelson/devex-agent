@@ -221,7 +221,7 @@ else
     "http": {
       "servers": {
         "devex": {
-          "listen": [":80", ":443"],
+          "listen": [":80"],
           "routes": []
         }
       }
@@ -251,7 +251,7 @@ Wants=network-online.target
 
 [Service]
 Type=notify
-ExecStart=$INSTALL_PATH run --config $CONFIG_FILE --adapter json
+ExecStart=$INSTALL_PATH run --config $CONFIG_FILE
 ExecReload=/bin/kill -USR1 \$MAINPID
 Restart=on-failure
 RestartSec=5
