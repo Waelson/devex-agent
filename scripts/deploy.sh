@@ -211,13 +211,23 @@ sudo systemctl daemon-reload
 sudo systemctl restart devex-agent
 REMOTE
 
-sleep 4
-
 # ─── 7. Verificar ─────────────────────────────────────────────────────────────
 
 section "Verificando serviço"
 
-STATUS="$(ssh_run "systemctl is-active devex-agent 2>/dev/null || true")"
+info "Aguardando serviço estabilizar..."
+MAX_WAIT=20
+ELAPSED=0
+STATUS=""
+while [ "$ELAPSED" -lt "$MAX_WAIT" ]; do
+  STATUS="$(ssh_run "systemctl is-active devex-agent 2>/dev/null || true")"
+  case "$STATUS" in
+    active)           break ;;
+    failed|inactive)  break ;;
+    activating)       sleep 2; ELAPSED=$((ELAPSED + 2)) ;;
+    *)                sleep 2; ELAPSED=$((ELAPSED + 2)) ;;
+  esac
+done
 
 if [ "$STATUS" = "active" ]; then
   ok "Serviço devex-agent está ATIVO"
