@@ -44,17 +44,46 @@ Para o modo **gateway**, o Caddy precisa estar rodando com a Admin API disponív
 
 ## Build
 
+### Build local (mesma plataforma)
+
 ```bash
 go build -o devex-agent ./cmd/devex-agent
 ```
 
-Verificar versão:
+### Build para Linux AWS (cross-compilation a partir do macOS ou Windows)
+
+As instâncias EC2 na AWS usam Linux x86_64. Para gerar o binário a partir de outra plataforma:
+
+```bash
+GOOS=linux GOARCH=amd64 go build -o devex-agent-linux-amd64 ./cmd/devex-agent
+```
+
+Para gerar um binário menor e sem símbolos de debug (recomendado para produção):
+
+```bash
+GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o devex-agent-linux-amd64 ./cmd/devex-agent
+```
+
+Após gerar o binário, copie para a instância EC2 via `scp`:
+
+```bash
+scp -i sua-chave.pem devex-agent-linux-amd64 ec2-user@<IP_DA_INSTANCIA>:/tmp/devex-agent
+```
+
+Na instância EC2, mova para o local definitivo:
+
+```bash
+sudo mv /tmp/devex-agent /usr/local/bin/devex-agent
+sudo chmod 755 /usr/local/bin/devex-agent
+```
+
+### Verificar versão
 
 ```bash
 ./devex-agent --version
 ```
 
-Validar config sem iniciar:
+### Validar config sem iniciar
 
 ```bash
 ./devex-agent --validate-config --config /etc/devex-agent/config.yaml
