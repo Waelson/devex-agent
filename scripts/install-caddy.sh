@@ -125,12 +125,17 @@ if [ "$SKIP_CHECKSUM" != "true" ]; then
   fi
 
   info "Verificando checksum SHA-256..."
-  cd "$TMPDIR"
-  if ! grep "$ARCHIVE" "$CHECKSUMS_FILE" | sha256sum --check --status; then
+  EXPECTED_HASH="$(grep "$ARCHIVE" "$TMPDIR/$CHECKSUMS_FILE" | awk '{print $1}')"
+  if [ -z "$EXPECTED_HASH" ]; then
+    die "Hash não encontrado no arquivo de checksums para $ARCHIVE."
+  fi
+  ACTUAL_HASH="$(sha256sum "$TMPDIR/$ARCHIVE" | awk '{print $1}')"
+  if [ "$EXPECTED_HASH" != "$ACTUAL_HASH" ]; then
+    error "Hash esperado : $EXPECTED_HASH"
+    error "Hash calculado: $ACTUAL_HASH"
     die "Checksum inválido para $ARCHIVE. O download pode estar corrompido."
   fi
-  cd - >/dev/null
-  ok "Checksum verificado com sucesso"
+  ok "Checksum verificado com sucesso ($ACTUAL_HASH)"
 else
   warn "Verificação de checksum ignorada (SKIP_CHECKSUM=true)."
 fi
