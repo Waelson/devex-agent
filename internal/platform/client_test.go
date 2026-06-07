@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -372,6 +373,112 @@ func TestClaimCommand_Forbidden403_NotRetried(t *testing.T) {
 	}
 	if calls.Load() != 1 {
 		t.Errorf("403 must not be retried, got %d calls", calls.Load())
+	}
+}
+
+// --- diagnostic logging on API errors ---
+
+// recordingHandler is a minimal slog.Handler that captures emitted records for assertions.
+type recordingHandler struct {
+	mu      sync.Mutex
+	records []slog.Record
+}
+
+func (h *recordingHandler) Enabled(context.Context, slog.Level) bool { return true }
+
+func (h *recordingHandler) Handle(_ context.Context, r slog.Record) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.records = append(h.records, r)
+	return nil
+}
+
+func (h *recordingHandler) WithAttrs([]slog.Attr) slog.Handler { return h }
+func (h *recordingHandler) WithGroup(string) slog.Handler      { return h }
+
+func (h *recordingHandler) find(message string) (slog.Record, bool) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for _, r := range h.records {
+		if r.Message == message {
+			return r, true
+		}
+	}
+	return slog.Record{}, false
+}
+
+func attrString(t *testing.T, r slog.Record, key string) string {
+	t.Helper()
+	var found string
+	var ok bool
+	r.Attrs(func(a slog.Attr) bool {
+		if a.Key == key {
+			found = a.Value.String()
+			ok = true
+			return false
+		}
+		return true
+	})
+	if !ok {
+		t.Fatalf("attribute %q not found in log record %q", key, r.Message)
+	}
+	return found
+}
+
+func TestClient_LogsDiagnosticsOnAPIError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		errorResponse(w, http.StatusConflict, "INVALID_VERSION", "reported version is ahead of current", false)
+	}))
+	defer srv.Close()
+
+	handler := &recordingHandler{}
+	logger := slog.New(handler)
+
+	c := NewClient(srv.URL, "test-token-secret", logger)
+	c.retry = zeroRetry
+	c.SetAgentID("agent-001")
+
+	err := c.ReportDesiredState(context.Background(), DesiredStateReportRequest{
+		Status:              "applied",
+		DesiredStateVersion: 1,
+		Type:                "gateway_routes",
+		Environment:         "dev",
+	})
+	if err == nil {
+		t.Fatal("expected error for 409 response")
+	}
+
+	rec, ok := handler.find("platform API request failed")
+	if !ok {
+		t.Fatal("expected a 'platform API request failed' log record")
+	}
+
+	if got := attrString(t, rec, "method"); got != http.MethodPost {
+		t.Errorf("method: got %q, want POST", got)
+	}
+	if got := attrString(t, rec, "path"); got != "/api/agents/agent-001/desired-state/report" {
+		t.Errorf("path: got %q", got)
+	}
+	if got := attrString(t, rec, "status_code"); got != "409" {
+		t.Errorf("status_code: got %q, want 409", got)
+	}
+	if got := attrString(t, rec, "response_body"); !strings.Contains(got, "reported version is ahead of current") {
+		t.Errorf("response_body: got %q, want it to contain the platform error message", got)
+	}
+	if got := attrString(t, rec, "error"); !strings.Contains(got, "reported version is ahead of current") {
+		t.Errorf("error: got %q, want it to contain the platform error message", got)
+	}
+
+	// The auth token must never appear in diagnostic logs.
+	for _, r := range handler.records {
+		var attrsDump strings.Builder
+		r.Attrs(func(a slog.Attr) bool {
+			attrsDump.WriteString(a.Value.String())
+			return true
+		})
+		if strings.Contains(attrsDump.String(), "test-token-secret") {
+			t.Errorf("log record %q leaked the auth token: %s", r.Message, attrsDump.String())
+		}
 	}
 }
 

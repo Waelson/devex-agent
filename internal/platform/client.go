@@ -16,6 +16,9 @@ import (
 
 const defaultHTTPClientTimeout = 15 * time.Second
 
+// maxResponseBodyLog truncates response bodies in diagnostic logs to avoid noise.
+const maxResponseBodyLog = 1000
+
 // retryPolicy controls how the client retries failed requests.
 type retryPolicy struct {
 	maxAttempts     int
@@ -277,10 +280,26 @@ func (c *Client) do(ctx context.Context, method, path string, bodyObj any) ([]by
 	}
 
 	if resp.StatusCode >= 400 {
-		return nil, resp.StatusCode, c.buildAPIError(respBody, resp.StatusCode)
+		apiErr := c.buildAPIError(respBody, resp.StatusCode)
+		c.logger.Warn("platform API request failed",
+			"method", method,
+			"path", path,
+			"status_code", resp.StatusCode,
+			"response_body", truncate(string(respBody), maxResponseBodyLog),
+			"error", apiErr,
+		)
+		return nil, resp.StatusCode, apiErr
 	}
 
 	return respBody, resp.StatusCode, nil
+}
+
+// truncate shortens s to at most max characters, appending "..." when cut.
+func truncate(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	return s[:max] + "..."
 }
 
 // buildAPIError converts an error HTTP response into a typed OperationalError.

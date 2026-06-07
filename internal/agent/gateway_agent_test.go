@@ -4,6 +4,8 @@ import (
 	"context"
 	"io"
 	"log/slog"
+	"strings"
+	"sync"
 	"testing"
 
 	aerrors "devex-agent/internal/errors"
@@ -12,6 +14,49 @@ import (
 	"devex-agent/internal/platform"
 	"devex-agent/internal/state"
 )
+
+// recordingHandler is a minimal slog.Handler that captures emitted records for assertions.
+type recordingHandler struct {
+	mu      sync.Mutex
+	records []slog.Record
+}
+
+func (h *recordingHandler) Enabled(context.Context, slog.Level) bool { return true }
+
+func (h *recordingHandler) Handle(_ context.Context, r slog.Record) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.records = append(h.records, r)
+	return nil
+}
+
+func (h *recordingHandler) WithAttrs([]slog.Attr) slog.Handler { return h }
+func (h *recordingHandler) WithGroup(string) slog.Handler      { return h }
+
+func (h *recordingHandler) find(message string) (slog.Record, bool) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for _, r := range h.records {
+		if r.Message == message {
+			return r, true
+		}
+	}
+	return slog.Record{}, false
+}
+
+func recordAttr(r slog.Record, key string) (slog.Value, bool) {
+	var found slog.Value
+	var ok bool
+	r.Attrs(func(a slog.Attr) bool {
+		if a.Key == key {
+			found = a.Value
+			ok = true
+			return false
+		}
+		return true
+	})
+	return found, ok
+}
 
 // ============================================================
 // Fake implementations
@@ -379,6 +424,9 @@ func TestGatewayAgent_ReconcileOnce_AppliesNewVersion(t *testing.T) {
 	if report.Type != "gateway_routes" {
 		t.Errorf("type: got %q, want gateway_routes", report.Type)
 	}
+	if report.Environment != "test" {
+		t.Errorf("environment: got %q, want test", report.Environment)
+	}
 
 	// State must be updated.
 	a.mu.Lock()
@@ -420,6 +468,9 @@ func TestGatewayAgent_ReconcileOnce_GenerationFails_ReportsError(t *testing.T) {
 	if report.Error.Code != string(aerrors.CodeCaddyConfigGenerationFailed) {
 		t.Errorf("error code: got %q, want CADDY_CONFIG_GENERATION_FAILED", report.Error.Code)
 	}
+	if report.Environment != "test" {
+		t.Errorf("environment: got %q, want test", report.Environment)
+	}
 }
 
 func TestGatewayAgent_ReconcileOnce_LoadFails_RestoresLastGoodAndReports(t *testing.T) {
@@ -439,6 +490,9 @@ func TestGatewayAgent_ReconcileOnce_LoadFails_RestoresLastGoodAndReports(t *test
 	}
 	if report.Error.Code != string(aerrors.CodeCaddyLoadFailed) {
 		t.Errorf("error code: got %q, want CADDY_LOAD_FAILED", report.Error.Code)
+	}
+	if report.Environment != "test" {
+		t.Errorf("environment: got %q, want test", report.Environment)
 	}
 
 	// lastSuccessfulVersion must NOT be updated on failure.
@@ -471,6 +525,89 @@ func TestGatewayAgent_ReconcileOnce_RouteValidationFails_RestoresAndReports(t *t
 	}
 	if report.Error.Code != string(aerrors.CodeCaddyRouteValidationFailed) {
 		t.Errorf("error code: got %q, want CADDY_ROUTE_VALIDATION_FAILED", report.Error.Code)
+	}
+	if report.Environment != "test" {
+		t.Errorf("environment: got %q, want test", report.Environment)
+	}
+}
+
+// ============================================================
+// Diagnostic logging tests
+// ============================================================
+
+func TestGatewayAgent_ReportFailure_LogsEndpointAndPayloadOnError(t *testing.T) {
+	a, pc, _, _, _, _ := newTestGatewayAgent(t)
+	pc.reportErr = aerrors.New(aerrors.CodeCommandClaimFailed, "reported version is ahead of current")
+
+	handler := &recordingHandler{}
+	a.logger = slog.New(handler)
+
+	a.reportFailure(context.Background(), 1, aerrors.CodeCaddyLoadFailed, "invalid JSON")
+
+	rec, ok := handler.find("gateway: failed to report desired state failure")
+	if !ok {
+		t.Fatal("expected a 'gateway: failed to report desired state failure' log record")
+	}
+
+	endpoint, ok := recordAttr(rec, "endpoint")
+	if !ok || !strings.Contains(endpoint.String(), "/desired-state/report") {
+		t.Errorf("endpoint attr missing or unexpected: %v (found=%v)", endpoint, ok)
+	}
+
+	payload, ok := recordAttr(rec, "payload")
+	if !ok {
+		t.Fatal("payload attr missing from log record")
+	}
+	req, isReq := payload.Any().(platform.DesiredStateReportRequest)
+	if !isReq {
+		t.Fatalf("payload attr has unexpected type %T", payload.Any())
+	}
+	if req.Environment != "test" {
+		t.Errorf("payload.environment: got %q, want test", req.Environment)
+	}
+	if req.Status != "failed" || req.DesiredStateVersion != 1 {
+		t.Errorf("payload: got status=%q version=%d, want status=failed version=1", req.Status, req.DesiredStateVersion)
+	}
+
+	errAttr, ok := recordAttr(rec, "error")
+	if !ok || !strings.Contains(errAttr.String(), "reported version is ahead of current") {
+		t.Errorf("error attr missing or unexpected: %v (found=%v)", errAttr, ok)
+	}
+}
+
+func TestGatewayAgent_ReportSuccess_LogsEndpointAndPayloadOnError(t *testing.T) {
+	a, pc, _, _, _, _ := newTestGatewayAgent(t)
+	pc.reportErr = aerrors.New(aerrors.CodePlatformAPIUnavailable, "connection refused")
+
+	handler := &recordingHandler{}
+	a.logger = slog.New(handler)
+
+	a.reportSuccess(context.Background(), 1, 3, 3)
+
+	rec, ok := handler.find("gateway: failed to report desired state success")
+	if !ok {
+		t.Fatal("expected a 'gateway: failed to report desired state success' log record")
+	}
+
+	endpoint, ok := recordAttr(rec, "endpoint")
+	if !ok || !strings.Contains(endpoint.String(), "/desired-state/report") {
+		t.Errorf("endpoint attr missing or unexpected: %v (found=%v)", endpoint, ok)
+	}
+
+	payload, ok := recordAttr(rec, "payload")
+	if !ok {
+		t.Fatal("payload attr missing from log record")
+	}
+	req, isReq := payload.Any().(platform.DesiredStateReportRequest)
+	if !isReq {
+		t.Fatalf("payload attr has unexpected type %T", payload.Any())
+	}
+	if req.Environment != "test" {
+		t.Errorf("payload.environment: got %q, want test", req.Environment)
+	}
+	if req.Status != "applied" || req.DesiredStateVersion != 1 || req.RoutesTotal != 3 {
+		t.Errorf("payload: got status=%q version=%d routes_total=%d, want applied/1/3",
+			req.Status, req.DesiredStateVersion, req.RoutesTotal)
 	}
 }
 

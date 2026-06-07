@@ -496,6 +496,8 @@ remote.version == last_successful_applied_version
 
 Reporta resultado da aplicação de desired state.
 
+`environment` é obrigatório e deve ser igual ao environment do agent (o mesmo valor usado no registro e retornado por `GET /desired-state`). A Platform usa esse campo para localizar o desired state correspondente; um valor vazio ou divergente faz a versão reportada parecer "à frente" do estado atual e resulta em `409 INVALID_VERSION`.
+
 ### Request — sucesso
 
 ```json
@@ -503,6 +505,7 @@ Reporta resultado da aplicação de desired state.
   "status": "applied",
   "desired_state_version": 43,
   "type": "gateway_routes",
+  "environment": "dev",
   "routes_total": 12,
   "validated_routes": 12,
   "failed_routes": 0,
@@ -517,6 +520,7 @@ Reporta resultado da aplicação de desired state.
   "status": "failed",
   "desired_state_version": 43,
   "type": "gateway_routes",
+  "environment": "dev",
   "error": {
     "code": "CADDY_ROUTE_VALIDATION_FAILED",
     "message": "Route billing-api.dev.useclarus.app did not pass health check",

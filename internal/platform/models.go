@@ -181,6 +181,7 @@ type DesiredStateReportRequest struct {
 	Status              string               `json:"status"`
 	DesiredStateVersion int                  `json:"desired_state_version"`
 	Type                string               `json:"type"`
+	Environment         string               `json:"environment"`
 	RoutesTotal         int                  `json:"routes_total,omitempty"`
 	ValidatedRoutes     int                  `json:"validated_routes,omitempty"`
 	FailedRoutes        int                  `json:"failed_routes,omitempty"`

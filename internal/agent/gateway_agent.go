@@ -457,6 +457,10 @@ func (a *GatewayAgent) restoreLastGood(ctx context.Context) {
 	a.logger.Info("gateway: last-good config restored")
 }
 
+// desiredStateReportEndpoint is the logical Platform API path used for diagnostic logging.
+// The concrete path includes the agent_id, which the platform client owns.
+const desiredStateReportEndpoint = "/api/agents/{agent_id}/desired-state/report"
+
 // reportSuccess reports a successfully applied desired state to the Platform API.
 func (a *GatewayAgent) reportSuccess(ctx context.Context, version, total, validated int) {
 	now := time.Now().UTC()
@@ -464,6 +468,7 @@ func (a *GatewayAgent) reportSuccess(ctx context.Context, version, total, valida
 		Status:              "applied",
 		DesiredStateVersion: version,
 		Type:                "gateway_routes",
+		Environment:         a.cfg.Agent.Environment,
 		RoutesTotal:         total,
 		ValidatedRoutes:     validated,
 		FailedRoutes:        0,
@@ -472,7 +477,11 @@ func (a *GatewayAgent) reportSuccess(ctx context.Context, version, total, valida
 	rCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	if err := a.deps.Platform.ReportDesiredState(rCtx, req); err != nil {
-		a.logger.Warn("gateway: failed to report desired state success", "error", err)
+		a.logger.Warn("gateway: failed to report desired state success",
+			"endpoint", desiredStateReportEndpoint,
+			"payload", req,
+			"error", err,
+		)
 	}
 }
 
@@ -482,6 +491,7 @@ func (a *GatewayAgent) reportFailure(ctx context.Context, version int, code aerr
 		Status:              "failed",
 		DesiredStateVersion: version,
 		Type:                "gateway_routes",
+		Environment:         a.cfg.Agent.Environment,
 		Error: &platform.CommandErrorPayload{
 			Code:    string(code),
 			Message: msg,
@@ -490,6 +500,10 @@ func (a *GatewayAgent) reportFailure(ctx context.Context, version int, code aerr
 	rCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	if err := a.deps.Platform.ReportDesiredState(rCtx, req); err != nil {
-		a.logger.Warn("gateway: failed to report desired state failure", "error", err)
+		a.logger.Warn("gateway: failed to report desired state failure",
+			"endpoint", desiredStateReportEndpoint,
+			"payload", req,
+			"error", err,
+		)
 	}
 }
