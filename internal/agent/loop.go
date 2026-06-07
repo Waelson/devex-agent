@@ -3,10 +3,13 @@ package agent
 import (
 	"context"
 	"fmt"
+	"io"
 	"log/slog"
 	"math/rand/v2"
 	"net"
+	"net/http"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -339,7 +342,42 @@ func discoverHostname() string {
 }
 
 func discoverInstanceID() string {
-	// In production EC2, this would read from instance metadata service.
-	// For MVP, return empty string; the Platform accepts it.
+	// IMDSv2: obtain a session token first, then fetch the instance-id.
+	tokenReq, err := http.NewRequest(http.MethodPut, "http://169.254.169.254/latest/api/token", nil)
+	if err == nil {
+		tokenReq.Header.Set("X-aws-ec2-metadata-token-ttl-seconds", "21600")
+		client := &http.Client{Timeout: 2 * time.Second}
+		tokenResp, err := client.Do(tokenReq)
+		if err == nil {
+			defer tokenResp.Body.Close()
+			tokenBytes, err := io.ReadAll(tokenResp.Body)
+			if err == nil && tokenResp.StatusCode == http.StatusOK {
+				idReq, err := http.NewRequest(http.MethodGet, "http://169.254.169.254/latest/meta-data/instance-id", nil)
+				if err == nil {
+					idReq.Header.Set("X-aws-ec2-metadata-token", strings.TrimSpace(string(tokenBytes)))
+					idResp, err := client.Do(idReq)
+					if err == nil {
+						defer idResp.Body.Close()
+						idBytes, err := io.ReadAll(idResp.Body)
+						if err == nil && idResp.StatusCode == http.StatusOK {
+							return strings.TrimSpace(string(idBytes))
+						}
+					}
+				}
+			}
+		}
+	}
+
+	// IMDSv1 fallback.
+	client := &http.Client{Timeout: 2 * time.Second}
+	resp, err := client.Get("http://169.254.169.254/latest/meta-data/instance-id")
+	if err == nil {
+		defer resp.Body.Close()
+		b, err := io.ReadAll(resp.Body)
+		if err == nil && resp.StatusCode == http.StatusOK {
+			return strings.TrimSpace(string(b))
+		}
+	}
+
 	return ""
 }
