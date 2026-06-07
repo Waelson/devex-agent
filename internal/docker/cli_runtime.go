@@ -186,7 +186,7 @@ func (r *CLIRuntime) ListContainers(ctx context.Context, filter ContainerFilter)
 	args := []string{"ps", "-a", "--format", "{{json .}}"}
 
 	if filter.ManagedOnly {
-		args = append(args, "--filter", labelManaged+"="+labelManagedValue)
+		args = append(args, "--filter", "label="+labelManaged+"="+labelManagedValue)
 	}
 	for k, v := range filter.Labels {
 		args = append(args, "--filter", fmt.Sprintf("label=%s=%s", k, v))

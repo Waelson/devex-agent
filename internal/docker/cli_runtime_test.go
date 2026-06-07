@@ -563,7 +563,7 @@ func TestListContainers_ManagedOnlyFilter(t *testing.T) {
 
 	call := fake.LastCall()
 	// Must pass label filter to docker
-	if !argsContainPair(call.Args, "--filter", "devex.managed=true") {
+	if !argsContainPair(call.Args, "--filter", "label=devex.managed=true") {
 		t.Errorf("managed-only filter not applied: args=%v", call.Args)
 	}
 }
